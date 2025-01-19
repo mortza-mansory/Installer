@@ -36,6 +36,7 @@ starlette==0.41.3
 typing_extensions==4.12.2
 uvicorn==0.32.1
 psutil 6.1.1
+python-multipart==0.0.20
 """
 
 def color_text(text, color_code):
@@ -50,6 +51,16 @@ def print_yellow(text):
 def print_red(text):
     print(color_text(text, "31"))
 
+# def get_current_username():
+#     return os.getlogin()
+
+def stop_service(service_name):
+    try:
+        print_yellow(f"Stopping the {service_name} service...")
+        subprocess.check_call(["sudo", "systemctl", "stop", service_name])
+        print_green(f"{service_name} service stopped successfully.")
+    except subprocess.CalledProcessError as e:
+        print_red(f"Failed to stop {service_name} service: {e}")
 
 def check_setup_files():
     required_folders = ["waf-ghb", "waf-ghf", "waf-ghc"]
@@ -422,7 +433,6 @@ def configure_apache_backend():
             print_yellow(f"{compiled_script} and {backend_script_dest} are the same file. Skipping copy.")
     else:
         print_red(f"Compiled script {compiled_script} not found. Backend setup cannot proceed.")
-        sys.exit(1)
 
     print_yellow("Creating Apache configuration file for backend with CORS headers...")
 
@@ -453,18 +463,30 @@ def configure_apache_backend():
     subprocess.check_call(["/usr/sbin/a2ensite", "waf-ghb_project.conf"])
     subprocess.check_call(["sudo", "systemctl", "reload", "apache2"])
 
+import os
+import shutil
+import subprocess
+
 def create_backend_service_and_socket(socket_path, config):
     service_path = "/etc/systemd/system/waf-ghb-backend.service"
-    socket_config_path = "/etc/systemd/system/waf-ghb-backend.socket"
+    username = os.getenv("USER") 
+
+    print(f"Running as user: {username}") 
 
     try:
         if not os.path.isdir("/etc/systemd/system/"):
             raise FileNotFoundError("/etc/systemd/system/ directory does not exist.")
-        venv_path = "/home/test/waf-interface/venv"
+        
+        venv_path = f"/home/{username}/waf-interface/venv"  
         python_executable = os.path.join(venv_path, "bin", "python3")
         uvicorn_executable = os.path.join(venv_path, "bin", "uvicorn")
+
+        print(f"Checking python executable: {python_executable}")
+        print(f"Checking uvicorn executable: {uvicorn_executable}")
+        
         if not os.path.exists(python_executable) or not os.path.exists(uvicorn_executable):
             raise FileNotFoundError(f"Virtual environment or uvicorn not found at {venv_path}")
+
         temp_service_path = "./waf-ghb-backend.service"
         with open(temp_service_path, "w") as service_file:
             service_file.write(f"""
@@ -476,42 +498,25 @@ After=network.target
 # Explicitly use the Python from the virtual environment and uvicorn to run the backend
 ExecStart={python_executable} -m uvicorn waf-ghb.main:app --host 0.0.0.0 --port 6200 --ssl-keyfile /etc/ssl/private/waf-gh-self-signed.key --ssl-certfile /etc/ssl/private/waf-gh-self-signed.crt
 Environment=PATH={venv_path}/bin:$PATH
-WorkingDirectory=/home/test/waf-interface
+WorkingDirectory=/home/{username}/waf-interface
 Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
-            """)
+                  """)
+
         print(f"Temporary service file created at {temp_service_path}")
 
         shutil.move(temp_service_path, service_path)
-        temp_socket_path = "./waf-ghb-backend.socket"
-        with open(temp_socket_path, "w") as socket_file:
-            socket_file.write(f"""
-[Unit]
-Description=WAF GHB Backend Socket
-
-[Socket]
-ListenStream={socket_path}
-SocketUser=www-data
-SocketGroup=www-data
-
-[Install]
-WantedBy=sockets.target
-            """)
-        print(f"Temporary socket file created at {temp_socket_path}")
-        shutil.move(temp_socket_path, socket_config_path)
-        subprocess.check_call(["sudo", "systemctl", "daemon-reload"])
         
-        subprocess.check_call(["sudo", "systemctl", "enable", "waf-ghb-backend.socket"])
-        subprocess.check_call(["sudo", "systemctl", "start", "waf-ghb-backend.socket"])
+        subprocess.check_call(["sudo", "systemctl", "daemon-reload"])
 
         print("Systemd service and socket activation configured and started for backend.")
 
     except Exception as e:
         print(f"Error occurred: {e}")
         raise
- 
+
 def update_ports_conf(desired_port):
     apache_ports_conf = "/etc/apache2/ports.conf"
 
@@ -550,48 +555,69 @@ def enable_apache_modules():
 
     print_green("Required Apache modules enabled and Apache reloaded.")
 
+
 def check_and_download_controller():
     app_name = "waf-interface"
-    app_url = "https://github.com/Waf-Interface/Cli-Controller/releases/download/0.0.1/waf-interface"
-   
-    if not os.path.exists(app_name):
-        print(f"{app_name} not found in the current folder. Downloading...")
-        download_command = f"wget -q {app_url} -O {app_name}"
-        result = os.system(download_command)
-
-        if result != 0:
-            print(f"Failed to download {app_name}. Please check your internet connection and try again.")
+    repo_url = "https://github.com/Waf-Interface/Cli-Controller"
+    try:
+        print_yellow("Fetching the latest release information...")
+        result = subprocess.run(
+            ["curl", "-s", f"{repo_url}/releases/latest", "-L", "-o", "/dev/null", "-w", "%{url_effective}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print_red("Failed to fetch the latest release URL. Ensure `curl` is installed and accessible.")
             return
-        os.chmod(app_name, os.stat(app_name).st_mode | 0o111)
-        print(f"{app_name} downloaded and made executable.")
+
+        latest_url = result.stdout.strip()
+        if "/releases/latest" in latest_url:
+            print("Failed to resolve the latest release URL.")
+            return
+        version = latest_url.split("/")[-1]
+        download_url = f"{repo_url}/releases/download/{version}/{app_name}"
+
+        print(f"Resolved latest release download URL: {download_url}")
+
+    except Exception as e:
+        print_red(f"An error occurred while fetching the release information: {e}")
+        return
+    if not os.path.exists(app_name):
+        print_yellow(f"{app_name} not found in the current folder. Downloading...")
+        try:
+            subprocess.run(["wget", "-q", download_url, "-O", app_name], check=True)
+            os.chmod(app_name, os.stat(app_name).st_mode | 0o111)
+            print(f"{app_name} downloaded and made executable.")
+        except subprocess.CalledProcessError:
+            print_red(f"Failed to download {app_name}. Please check the URL or your internet connection.")
+            return
     else:
         print(f"{app_name} is already available in the current folder.")
-        
     current_path = os.getcwd()
-
     if current_path not in os.environ["PATH"]:
         os.environ["PATH"] += os.pathsep + current_path
         print(f"Added {current_path} to PATH (this is temporary, for the current session).")
     else:
         print("Verification successful: The app is already in the PATH.")
-
     bashrc_file = os.path.expanduser("~/.bashrc")
     if not os.path.exists(bashrc_file):
-        print(f"{bashrc_file} not found. Cannot update the PATH permanently.")
+        print_red(f"{bashrc_file} not found. Cannot update the PATH permanently.")
         return
-    
+
     with open(bashrc_file, "a") as f:
-        f.write(f"\n# Adding {current_path}\waf-ghc to PATH\n")
-        f.write(f'export PATH="{current_path}\waf-ghc:$PATH"\n')
-    
-    print(f"Added {current_path} to PATH in {bashrc_file}. You need to restart your terminal or run 'source ~/.bashrc' for the change to take effect.")
-    
+        f.write(f"\n# Adding {current_path} to PATH\n")
+        f.write(f'export PATH="{current_path}:$PATH"\n')
+
+    print_green(f"Added {current_path} to PATH in {bashrc_file}. You need to restart your terminal or run 'source ~/.bashrc' for the change to take effect.")
+
+
 def main():
     # Step 0: 
     if not check_setup_files():
         print("Setup validation failed. Please ensure all required files and folders are present.")
         return  
-
+    stop_service("waf-ghb-backend")
+    
     # Step 1:
     check_python()
     check_pip()
