@@ -4,7 +4,7 @@ Use it with cution this app is currently in beta version Absoluty NO WARANTY.
 
 This version of installer designed for only working without any security measures and running via self certificate.
 
-Keep in mind this version is only for local host and will get on development status. 
+Keep in mind this version is only for local host and will get development status. 
 
 We are naming waf-gh<[f] frontend ,[b] backend, [c] controller, [m] manager> for fun, but its actually made us see this important subject.
 
