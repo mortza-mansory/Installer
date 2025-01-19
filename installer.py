@@ -37,6 +37,8 @@ typing_extensions==4.12.2
 uvicorn==0.32.1
 psutil 6.1.1
 python-multipart==0.0.20
+wsproto
+websockets 
 """
 
 def color_text(text, color_code):
@@ -214,23 +216,24 @@ def update_frontend_config_js():
     except Exception as e:
         print_red(f"Error updating {config_js_path}: {e}")
         sys.exit(1)
+
 def cleanup_apache_configs():
     print_yellow("Cleaning up old Apache configurations...")
     apache_config_paths = [
         "/etc/apache2/sites-available/waf-ghf_project.conf",
         "/etc/apache2/sites-available/waf-ghb_project.conf",
+        "/etc/apache2/sites-available/default-ssl.conf",
     ]
-    
-    for path in apache_config_paths:
-        if os.path.exists(path):
-            os.remove(path)
-            print_green(f"Removed old Apache configuration: {path}")
-    
-    try:
-        subprocess.check_call(["sudo", "a2dissite", "waf-ghf_project.conf", "waf-ghb_project.conf"])
-    except subprocess.CalledProcessError:
-        print_yellow("Some site configuration files do not exist, skipping a2dissite.")
-    
+            
+    sites_enabled_path = "/etc/apache2/sites-enabled/"
+    for symlink in os.listdir(sites_enabled_path):
+        symlink_path = os.path.join(sites_enabled_path, symlink)
+        if not os.path.exists(os.readlink(symlink_path)): 
+            os.remove(symlink_path)
+            print_yellow(f"Removed dangling symlink: {symlink_path}")
+
+    subprocess.run(["sudo", "apache2ctl", "configtest"], check=True) 
+
     apache_status = subprocess.run(
         ["systemctl", "is-active", "apache2"], stdout=subprocess.PIPE, text=True
     ).stdout.strip()
@@ -240,7 +243,7 @@ def cleanup_apache_configs():
         subprocess.check_call(["sudo", "systemctl", "start", "apache2"])
         print_green("Apache started.")
     
-    subprocess.check_call(["sudo", "systemctl", "reload", "apache2"])  
+    subprocess.check_call(["sudo", "systemctl", "reload", "apache2"])
     print_green("Apache configurations cleaned and reloaded.")
 
 def cleanup_virtualenv():
@@ -379,7 +382,7 @@ def configure_apache_frontend(desired_port):
     print_yellow("Creating Apache configuration file for frontend with SSL and backend proxy rules...")
 
     with open(apache_config_path, "w") as config_file:
-        config_file.write(f"""
+     config_file.write(f"""
 <VirtualHost *:{desired_port}>
     DocumentRoot {FRONTEND_DIR}
     <Directory {FRONTEND_DIR}>
@@ -392,17 +395,22 @@ def configure_apache_frontend(desired_port):
     SSLCertificateFile {cert_file}
     SSLCertificateKeyFile {key_file}
 
-    # CORS settings for frontend (optional, but helps with CORS issues)
+    # CORS settings for frontend
     Header set Access-Control-Allow-Origin "*"
     Header set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
     Header set Access-Control-Allow-Headers "Content-Type, X-Requested-With, Authorization"
     Header set Access-Control-Allow-Credentials "true"
 
+    # Proxy WebSocket requests to the backend server
+    ProxyPass "/ws" "wss://0.0.0.0:6200/ws"
+    ProxyPassReverse "/ws" "wss://0.0.0.0:6200/ws"
+
     <Location />
         Require all granted
     </Location>
 </VirtualHost>
-        """)
+
+""")
 
     print_green("Apache configuration file for frontend with SSL and backend proxy rules created successfully.")
     subprocess.check_call(["/usr/sbin/a2ensite", "waf-ghf_project.conf"])
@@ -463,9 +471,6 @@ def configure_apache_backend():
     subprocess.check_call(["/usr/sbin/a2ensite", "waf-ghb_project.conf"])
     subprocess.check_call(["sudo", "systemctl", "reload", "apache2"])
 
-import os
-import shutil
-import subprocess
 
 def create_backend_service_and_socket(socket_path, config):
     service_path = "/etc/systemd/system/waf-ghb-backend.service"
@@ -617,7 +622,7 @@ def main():
         print("Setup validation failed. Please ensure all required files and folders are present.")
         return  
     stop_service("waf-ghb-backend")
-    
+
     # Step 1:
     check_python()
     check_pip()
@@ -645,19 +650,19 @@ def main():
     read_ac_txt()
 
     # Step 7:
-    enable_apache_modules()
-
-    # Step 8:
     configure_apache_frontend(desired_port)
     configure_apache_backend()
 
-    # Step 9: 
+    # Step 8: 
     socket_path = f"/run/waf-ghb-backend-{desired_port}.sock"
     config = read_ac_txt()
     update_ports_conf(desired_port)
     update_frontend_config_js()
     create_backend_service_and_socket(socket_path, config)
-    
+
+    # Step 9:
+    enable_apache_modules()
+
     # Step 10:
     check_and_download_controller()
 
