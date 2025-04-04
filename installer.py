@@ -7,10 +7,13 @@ import socket
 import shutil
 import base64
 import re
+import json
 
-PROJECT_DIR = os.path.abspath(".")
-BACKEND_DIR = os.path.abspath("waf-ghb")
-FRONTEND_DIR = os.path.abspath("waf-ghf")
+# Constants
+WAF_ROOT = "/opt/waf_interface"  # Project root directory
+PROJECT_DIR = WAF_ROOT
+BACKEND_DIR = os.path.join(WAF_ROOT, "waf-ghb")
+FRONTEND_DIR = os.path.join(WAF_ROOT, "waf-ghf")
 VENV_PATH = os.path.join(BACKEND_DIR, "venv")
 NGINX_VERSION = "1.23.0"
 MODSEC_NGINX_REPO = "https://github.com/owasp-modsecurity/ModSecurity-nginx.git"
@@ -20,6 +23,7 @@ APACHE_PORTS_CONF = "/etc/apache2/ports.conf"
 APACHE_SITES_AVAILABLE = "/etc/apache2/sites-available"
 NGINX_CONF_DIR = "/usr/local/nginx/conf"
 NGINX_SBIN = "/usr/local/nginx/sbin/nginx"
+BACKEND_PORT = 8081  # Updated to match app.py
 
 REQUIREMENTS = """
 annotated-types==0.7.0
@@ -152,7 +156,6 @@ def cleanup_apache_configs():
     print_yellow("Cleaning up old Apache configurations...")
     apache_config_paths = [
         os.path.join(APACHE_SITES_AVAILABLE, "waf-ghf_project.conf"),
-        os.path.join(APACHE_SITES_AVAILABLE, "waf-ghb_project.conf"),
         os.path.join(APACHE_SITES_AVAILABLE, "default-ssl.conf"),
     ]
     sites_enabled_path = "/etc/apache2/sites-enabled/"
@@ -229,7 +232,7 @@ keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
 subjectAltName = @alt_names
 
-[alt_names]
+[alt_names HEART]
 IP.1 = {ip_address}
             """)
         subprocess.check_call(["openssl", "genrsa", "-out", key_file, "2048"])
@@ -242,6 +245,20 @@ IP.1 = {ip_address}
         os.remove(config_file)
         print_green(f"SSL certificates generated: {cert_file}, {key_file}")
     return cert_file, key_file
+
+def configure_config_files(ip_address):
+    """Configure config.json for frontend with the server's IP and backend port."""
+    config_dir = os.path.join(FRONTEND_DIR, "assets", "assets")
+    config_file_path = os.path.join(config_dir, "config.json")
+    os.makedirs(config_dir, exist_ok=True)
+    print_yellow("Configuring config.json...")
+    config_data = {
+        "http_address": f"https://{ip_address}:{BACKEND_PORT}",
+        "websocket_address": f"wss://{ip_address}:{BACKEND_PORT}/ws"
+    }
+    with open(config_file_path, "w") as f:
+        json.dump(config_data, f, indent=4)
+    print_green(f"config.json configured at {config_file_path}")
 
 def configure_apache_frontend(desired_port, cert_file, key_file):
     apache_config_path = os.path.join(APACHE_SITES_AVAILABLE, "waf-ghf_project.conf")
@@ -261,10 +278,10 @@ def configure_apache_frontend(desired_port, cert_file, key_file):
     SSLCertificateKeyFile {key_file}
 
     SSLProxyEngine on
-    ProxyPass "/api" "https://0.0.0.0:6200/api"
-    ProxyPassReverse "/api" "https://0.0.0.0:6200/api"
-    ProxyPass "/ws" "wss://0.0.0.0:6200/ws"
-    ProxyPassReverse "/ws" "wss://0.0.0.0:6200/ws"
+    ProxyPass "/api" "https://{get_server_ip()}:{BACKEND_PORT}/api"
+    ProxyPassReverse "/api" "https://{get_server_ip()}:{BACKEND_PORT}/api"
+    ProxyPass "/ws" "wss://{get_server_ip()}:{BACKEND_PORT}/ws"
+    ProxyPassReverse "/ws" "wss://{get_server_ip()}:{BACKEND_PORT}/ws"
 
     Header set Access-Control-Allow-Origin "*"
     Header set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
@@ -289,7 +306,7 @@ After=network.target
 User=www-data
 Group=www-data
 WorkingDirectory={BACKEND_DIR}
-ExecStart={python_executable} -m uvicorn waf-ghb.main:app --host 0.0.0.0 --port 6200 --ssl-keyfile {key_file} --ssl-certfile {cert_file}
+ExecStart={python_executable} -m uvicorn app:app --host 0.0.0.0 --port {BACKEND_PORT} --ssl-keyfile {key_file} --ssl-certfile {cert_file}
 Environment=PATH={VENV_PATH}/bin:$PATH
 Restart=on-failure
 
@@ -297,9 +314,10 @@ Restart=on-failure
 WantedBy=multi-user.target
 """)
     subprocess.check_call(["sudo", "systemctl", "daemon-reload"])
-    print_green("Backend service created.")
+    subprocess.check_call(["sudo", "systemctl", "enable", "waf-ghb-backend"])
+    subprocess.check_call(["sudo", "systemctl", "start", "waf-ghb-backend"])
+    print_green("Backend service created and started.")
 
-# Nginx setup functions
 def remove_existing_nginx():
     print_yellow("Removing existing Nginx installation...")
     for path in ["/usr/local/nginx", "/etc/nginx", "/var/log/nginx", "/var/run/nginx"]:
@@ -495,7 +513,7 @@ def enable_apache_modules():
     for mod in ["ssl", "proxy", "proxy_http", "proxy_wstunnel", "rewrite"]:
         subprocess.check_call(["sudo", "a2enmod", mod])
     subprocess.check_call(["sudo", "systemctl", "reload", "apache2"])
-    subprocess.check_call(["sudo", "systemctl", "restart", "waf-ghb-backend.service"])
+    subprocess.check_call(["sudo", "systemctl", "restart", "waf-ghb-backend"])
     print_green("Apache modules enabled and services restarted.")
 
 def check_and_download_controller():
@@ -507,23 +525,20 @@ def check_and_download_controller():
     ).stdout.strip()
     version = latest_url.split("/")[-1]
     download_url = f"{repo_url}/releases/download/{version}/{app_name}"
-    if not os.path.exists(app_name):
+    if not os.path.exists(os.path.join(WAF_ROOT, app_name)):
         print_yellow(f"Downloading {app_name}...")
-        subprocess.run(["wget", "-q", download_url, "-O", app_name])
-        os.chmod(app_name, 0o755)
-        print_green(f"{app_name} downloaded.")
+        subprocess.run(["wget", "-q", download_url, "-O", os.path.join(WAF_ROOT, app_name)])
+        os.chmod(os.path.join(WAF_ROOT, app_name), 0o755)
+        print_green(f"{app_name} downloaded to {WAF_ROOT}.")
     bashrc = os.path.expanduser("~/.bashrc")
-    current_path = os.getcwd()
     with open(bashrc, "a") as f:
-        f.write(f"\nexport PATH=\"{current_path}:$PATH\"\n")
+        f.write(f"\nexport PATH=\"{WAF_ROOT}:$PATH\"\n")
     print_green("Controller setup complete. Run 'source ~/.bashrc' to update PATH.")
 
 def prepare_ssl_certificates(key_file, cert_file):
-    parent_dir = os.path.dirname(PROJECT_DIR)
-    shutil.copy2(key_file, os.path.join(parent_dir, "waf-gh-self-signed.key"))
-    shutil.copy2(cert_file, os.path.join(parent_dir, "waf-gh-self-signed.crt"))
-    print_green(f"Certificates copied to {parent_dir}.")
-
+    shutil.copy2(key_file, os.path.join(WAF_ROOT, "waf-gh-self-signed.key"))
+    shutil.copy2(cert_file, os.path.join(WAF_ROOT, "waf-gh-self-signed.crt"))
+    print_green(f"Certificates copied to {WAF_ROOT}.")
 
 def install_prerequisites():
     print_yellow("Checking and installing prerequisites...")
@@ -536,7 +551,6 @@ def install_prerequisites():
         result = subprocess.run(["dpkg", "-l", pkg], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode != 0:
             missing.append(pkg)
-    
     if missing:
         print_yellow(f"Installing missing prerequisites: {', '.join(missing)}")
         subprocess.check_call(["sudo", "apt-get", "update"])
@@ -545,8 +559,24 @@ def install_prerequisites():
     else:
         print_green("All prerequisites are already installed.")
 
+def setup_project_root():
+    """Set up the project root directory and move files into it."""
+    if not os.path.exists(WAF_ROOT):
+        print_yellow(f"Creating project root at {WAF_ROOT}...")
+        os.makedirs(WAF_ROOT, exist_ok=True)
+    current_dir = os.getcwd()
+    for item in ["waf-ghb", "waf-ghf", "waf-ghc", "ghv.txt"]:
+        src = os.path.join(current_dir, item)
+        dest = os.path.join(WAF_ROOT, item)
+        if os.path.exists(src) and not os.path.exists(dest):
+            shutil.move(src, dest)
+            print_green(f"Moved {item} to {dest}")
+    adjust_permissions(WAF_ROOT)
+
 def main():
-    install_prerequisites() 
+    install_prerequisites()
+    
+    setup_project_root()  # Set up the project root first
     
     if not check_setup_files():
         print_red("Setup validation failed.")
@@ -570,6 +600,7 @@ def main():
     ip_address = get_server_ip()
     cert_file, key_file = create_ssl_certificate(ip_address)
     
+    configure_config_files(ip_address)  
     configure_apache_frontend(desired_port, cert_file, key_file)
     create_backend_service(cert_file, key_file)
     setup_nginx(desired_port, ip_address, cert_file, key_file)
