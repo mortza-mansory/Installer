@@ -1,0 +1,4 @@
+{
+  "http_address": "http://192.168.70.129:8081",
+  "websocket_address": "ws://192.168.70.129:8081/ws"
+}
