@@ -6,6 +6,12 @@ Welcome user! you can easily now install your waf interface over modsecurity in 
 - **Root Access**: The script requires `sudo` privileges.
 - **Internet Access**: Needed to download dependencies and components.
 
+## Output review
+- **Using lasted build WASM from Waf2Flutter
+- **Using methods for roubost installing without needing proumt other things!
+- **Easy even for people who doesnt know terminal even through they have server!
+- **Optimized for 1 GB RAB!( 2gb RAM is almost need for runing everything fine..)
+ 
 
 Use it with cution this app is currently in beta version Absoluty NO WARANTY.
 This version of installer designed for only working without any security measures and running via self certificate.
