@@ -8,13 +8,16 @@ Welcome user! you can easily now install your waf interface over modsecurity in 
 - **Internet Access**: Needed to download dependencies and components.
 
 ## Installing
-- **First clone lasted version**: Use this command to download the lasted installer immedently( or just clone it without zip):
+- **First clone lasted version**: Use this command to download the lasted installer immedently( or just clone it without using release):
 ```
+git clone https://github.com/Waf-Interface/Installer
+
+cd Installer
 ```
-- **Unpack it**: Use this command to unpack it from zip:
+- **Start the installer**: Install it using this command( make sure you are a root user):
 ```
+python3 installer.py
 ```
-- **Start the installer**: Install it 
 
 ## Output review
 - **Using lasted build WASM from Waf2Flutter**
