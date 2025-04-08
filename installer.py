@@ -114,6 +114,91 @@ def clean_installation():
     
     print("\033[32mCleanup complete! All WAF Interface components have been removed.\033[0m")
 
+def install_controller():
+    CONTROLLER_DIR = f"{WAF_ROOT}/waf-ghc"
+    CONTROLLER_SOURCE = "waf-ghc" 
+    SYMLINK_PATH = "/usr/local/bin/waf-interface"
+    
+    print("\033[34m[+] Installing WAF Controller...\033[0m")
+    
+    if not os.path.exists(CONTROLLER_SOURCE):
+        print(f"\033[31mError: Controller source directory '{CONTROLLER_SOURCE}' not found!\033[0m")
+        return False
+    
+    try:
+        run(f"sudo mkdir -p {CONTROLLER_DIR} && sudo chown $USER:$USER {CONTROLLER_DIR}")
+        
+        print(f"Copying controller files to {CONTROLLER_DIR}")
+        shutil.copytree(CONTROLLER_SOURCE, CONTROLLER_DIR, dirs_exist_ok=True,
+                       ignore=shutil.ignore_patterns('build*', 'CMake*', '*.o', '*.a'))
+        
+        if os.path.exists(f"{CONTROLLER_DIR}/CMakeLists.txt"):
+            print("Building controller...")
+            run(f"cd {CONTROLLER_DIR} && mkdir -p build && cd build && cmake .. && make")
+        
+        executable = None
+        possible_paths = [
+            f"{CONTROLLER_DIR}/build/waf-interface",
+            f"{CONTROLLER_DIR}/waf-interface",
+            f"{CONTROLLER_DIR}/waf-ghc"
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                executable = path
+                break
+        
+        if not executable:
+            print("\033[31mError: Could not find controller executable!\033[0m")
+            return False
+        
+        run(f"sudo chmod +x {executable}")
+        
+        print(f"Creating symlink at {SYMLINK_PATH}")
+        run(f"sudo ln -sf {executable} {SYMLINK_PATH}")
+        
+        print("\033[32mController installed successfully!\033[0m")
+        print(f"You can now use 'waf-interface' command from anywhere.\n")
+        return True
+        
+    except Exception as e:
+        print(f"\033[31mError installing controller: {str(e)}\033[0m")
+        return False
+def create_first_user():
+    print("\033[34m\n=== First Admin Account Setup ===\033[0m")
+    print("\033[33mYou need to create your first admin user account.\033[0m")
+    print("This account will have full access to the WAF interface.\n")
+    
+    while True:
+        choice = input("Create admin account now? [Y/n]: ").strip().lower()
+        if choice in ('', 'y', 'yes'):
+            break
+        elif choice in ('n', 'no'):
+            print("\033[33mYou can create admin accounts later with: waf-interface --user-add\033[0m")
+            return False
+        else:
+            print("\033[31mPlease enter 'y' or 'n'\033[0m")
+    
+    try:
+        result = subprocess.run(
+            "waf-interface --user-add",
+            shell=True,
+            executable="/bin/bash",
+            input=b'',
+            check=False
+        )
+        
+        if result.returncode == 0:
+            print("\033[32m\nAdmin account created successfully!\033[0m")
+            return True
+        else:
+            print("\033[31m\nAccount creation failed. You can try again later with:\033[0m")
+            print("  waf-interface --user-add")
+            return False
+            
+    except Exception as e:
+        print(f"\033[31mError: {str(e)}\033[0m")
+        return False
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--clean":
         clean_installation()
@@ -126,6 +211,7 @@ def main():
     run(f"sudo rm -rf {WAF_ROOT} /etc/apache2/sites-available/waf.conf")
     run("sudo find /etc/apache2/sites-enabled/ -type l -delete")
 
+    # Install dependencies
     print("\033[34m[2/8] Installing system dependencies...\033[0m")
     run("sudo apt-get update -y")
     run("sudo apt-get install -y apache2 libapache2-mod-wsgi-py3 openssl python3-venv")
@@ -257,6 +343,12 @@ WantedBy=multi-user.target
     print("\033[34mStarting services...\033[0m")
     run(f"sudo systemctl enable --now {SERVICE_NAME}")
 
+    install_controller()
+    create_first_user()
+
+    if not install_controller():
+        print("\033[31mController installation failed!\033[0m")
+        sys.exit(1)
     max_retries = 5
     for attempt in range(max_retries):
         print(f"\033[34mVerifying backend (attempt {attempt + 1}/{max_retries})...\033[0m")
