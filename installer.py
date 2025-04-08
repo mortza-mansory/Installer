@@ -184,8 +184,10 @@ def create_first_user():
             "waf-interface --user-add",
             shell=True,
             executable="/bin/bash",
-            input=b'',
-            check=False
+            check=False,
+            stdin=sys.stdin,  
+            stdout=sys.stdout, 
+            stderr=sys.stderr  
         )
         
         if result.returncode == 0:
@@ -199,6 +201,7 @@ def create_first_user():
     except Exception as e:
         print(f"\033[31mError: {str(e)}\033[0m")
         return False
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--clean":
         clean_installation()
@@ -211,7 +214,6 @@ def main():
     run(f"sudo rm -rf {WAF_ROOT} /etc/apache2/sites-available/waf.conf")
     run("sudo find /etc/apache2/sites-enabled/ -type l -delete")
 
-    # Install dependencies
     print("\033[34m[2/8] Installing system dependencies...\033[0m")
     run("sudo apt-get update -y")
     run("sudo apt-get install -y apache2 libapache2-mod-wsgi-py3 openssl python3-venv")
