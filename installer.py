@@ -274,7 +274,7 @@ def main():
     config_path = os.path.join(FRONTEND_DIR, "assets", "assets", "config.json")
     with open(config_path, "r+") as f:
         config = json.load(f)
-        config["http_address"] = f"https://{ip}/api"
+        config["http_address"] = f"https://{ip}"
         config["websocket_address"] = f"wss://{ip}/ws"
         f.seek(0)
         json.dump(config, f, indent=2)
