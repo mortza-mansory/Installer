@@ -45,7 +45,6 @@ User added successfully!
 - Configure systemd services
 
 ## What happaning after?
----
 **Nginx (Port 80/443): Reverse proxy with ModSecurity**
 
 **Apache (Port 8080): Serves frontend assets**
@@ -53,7 +52,8 @@ User added successfully!
 **Python Backend (Port 8081): FastAPI service for WAF management**
 
 **Security: OWASP CRS v3.3.4 with custom rules**
---
+
+
 ## Installation script review
 - **Using lasted build WASM from Waf2Flutter**
 - **Using methods for roubost installing without needing proumt other things!**
